@@ -4447,6 +4447,7 @@ h2{color:var(--gba-blue-bright) !important;border-bottom:3px solid var(--gba-bor
         const radialMenuWrap = document.getElementById('radial-menu-wrap');
         const playerNameInput = document.getElementById('player-name-input');
         function openRadialMenu() {
+            try { playerNameInput.blur(); } catch (_) {}
             titleStart.classList.add('is-hidden');
             radialMenuWrap.classList.add('is-open');
             radialMenuWrap.setAttribute('aria-hidden', 'false');
@@ -4479,8 +4480,27 @@ h2{color:var(--gba-blue-bright) !important;border-bottom:3px solid var(--gba-bor
             });
             button.addEventListener('mouseleave', () => button.classList.remove('is-hovered'));
             button.addEventListener('focus', () => button.classList.add('is-hovered'));
-            button.addEventListener('blur', () => button.classList.remove('is-hovered'));
+            button.addEventListener('blur', () => button.classList.remove('is-hovered', 'is-selected'));
         });
+
+        // 選択(拡大・明るい表示)を確実に解除する。
+        // 以前は別のメニューをタップするまで .is-selected が残り、拡大表示が戻らなかった。
+        function clearRadialSelection() {
+            document.querySelectorAll('.radial-item.is-selected, .radial-item.is-hovered').forEach(el => el.classList.remove('is-selected', 'is-hovered'));
+            radialLastTap = null;
+            radialLastTapTime = 0;
+            const a = document.activeElement;
+            if (a && a.classList && a.classList.contains('radial-item')) { try { a.blur(); } catch (_) {} }
+        }
+        document.addEventListener('pointerdown', (e) => {
+            if (!(e.target && e.target.closest && e.target.closest('.radial-item'))) clearRadialSelection();
+        }, true);
+        window.addEventListener('blur', clearRadialSelection);
+        (function watchModeScreen() {
+            const ms = document.getElementById('mode-screen');
+            if (!ms) return;
+            new MutationObserver(clearRadialSelection).observe(ms, { attributes: true, attributeFilter: ['class'] });
+        })();
 
         // PC/マウスは通常クリック。スマホ・タブレットなどタッチ端末はダブルタップで決定。
         const isTouchDevice = ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
@@ -5237,7 +5257,7 @@ h2{color:var(--gba-blue-bright) !important;border-bottom:3px solid var(--gba-bor
 
     function isVisible(el) {
         if (!el || !el.isConnected) return false;
-        if (el.closest('.hidden')) return false;
+        if (el.closest('.hidden, .title-start.is-hidden, #radial-menu-wrap[aria-hidden="true"]')) return false;
         const rect = el.getBoundingClientRect();
         if (rect.width === 0 && rect.height === 0) return false;
         const style = getComputedStyle(el);
@@ -5281,13 +5301,24 @@ h2{color:var(--gba-blue-bright) !important;border-bottom:3px solid var(--gba-bor
 
     const NATIVE_FOCUSABLE_TAGS = ['BUTTON', 'INPUT', 'SELECT', 'TEXTAREA', 'A'];
 
-    function setFocus(el, root) {
+    // タッチ端末では、自動フォーカス(画面切替時)でネイティブ focus() を呼ばない。
+    // 入力欄に focus() するとスマホのキーボードが勝手に開き、
+    // ボタンに focus() するとモード選択の :focus-visible 拡大表示が残ってしまうため。
+    const IS_TOUCH_ENV = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
+    function hasGamepadConnected() {
+        try { return Array.from(navigator.getGamepads ? navigator.getGamepads() : []).some(g => g && g.connected); }
+        catch (_) { return false; }
+    }
+
+    function setFocus(el, root, auto) {
         if (!el) return;
         clearFocusVisual();
         currentFocus = el;
         currentRoot = root || getActiveScopeRoot();
         el.classList.add('gpnav-focus');
-        if (NATIVE_FOCUSABLE_TAGS.indexOf(el.tagName) !== -1 || el.hasAttribute('tabindex')) {
+        if (auto && IS_TOUCH_ENV) {
+            // 見た目のフォーカスのみ(ネイティブ focus は呼ばない)
+        } else if (NATIVE_FOCUSABLE_TAGS.indexOf(el.tagName) !== -1 || el.hasAttribute('tabindex')) {
             try { el.focus({ preventScroll: true }); } catch (_) { try { el.focus(); } catch (_) {} }
         }
         try { el.scrollIntoView({ block: 'nearest', inline: 'nearest' }); } catch (_) {}
@@ -5295,6 +5326,8 @@ h2{color:var(--gba-blue-bright) !important;border-bottom:3px solid var(--gba-bor
 
     function ensureFocus() {
         const root = getActiveScopeRoot();
+        // タッチ操作のみ(ゲームパッド未接続)なら自動フォーカスは不要。
+        if (IS_TOUCH_ENV && !hasGamepadConnected()) { clearFocusVisual(); currentFocus = null; currentRoot = root; return; }
         const items = getFocusables(root);
         if (items.length === 0) { currentFocus = null; currentRoot = root; return; }
         if (currentFocus && root === currentRoot && items.indexOf(currentFocus) !== -1 && isVisible(currentFocus)) {
@@ -5304,7 +5337,7 @@ h2{color:var(--gba-blue-bright) !important;border-bottom:3px solid var(--gba-bor
             }
             return;
         }
-        setFocus(items[0], root);
+        setFocus(items[0], root, true);
     }
 
     function moveFocus(direction) {
